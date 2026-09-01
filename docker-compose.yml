@@ -1,0 +1,78 @@
+services:
+  nginx:
+    image: nginx:1.17
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - 8000:80
+    depends_on:
+      - backend
+      - frontend
+
+  redis:
+    image: redis
+    ports:
+      - 6379:6379
+
+  postgres:
+    image: postgres:12
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - '5432:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data:cached
+
+  worker:
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    command: celery --app app.core.celery_app.celery_app worker --loglevel=INFO -Q main-queue -c 1 -n worker@%h --without-mingle --without-gossip --without-heartbeat -E
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+
+  flower:
+    image: mher/flower
+    command: celery --broker=redis://redis:6379/0 flower --port=5555 --persistent=True --db=/data/flower.db
+    volumes:
+      - flower-data:/data
+    ports:
+        - 5555:5555
+    environment:
+      FLOWER_UNAUTHENTICATED_API: "1"
+    depends_on:
+      - "redis"
+
+  backend:
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    command: python app/main.py
+    tty: true
+    volumes:
+      - ./backend:/app/:cached
+      - ./.docker/.ipython:/root/.ipython:cached
+    environment:
+      PYTHONPATH: .
+      DATABASE_URL: 'postgresql://postgres:password@postgres:5432/postgres'
+    depends_on:
+      - "postgres"
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    stdin_open: true
+    volumes:
+      - './frontend:/app:cached'
+      - './frontend/node_modules:/app/node_modules:cached'
+    environment:
+      - NODE_ENV=development
+
+
+volumes:
+  db-data:
+  flower-data:
